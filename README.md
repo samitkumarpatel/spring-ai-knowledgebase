@@ -1,18 +1,18 @@
-# Spring AI 2.x Demo
+# Spring AI 2.x: A Step-by-Step Walkthrough
 
-**Scenario:** build a store support assistant that answers policy questions, checks orders, and evaluates its responses.
+Build a store support assistant step by step: generate answers, call tools, retrieve policy documents, and evaluate responses.
 
 **Versions checked: 28 October 2026.** Stable: **2.0.2**. Preview: **2.1.0-RC1**. Jev and SkillsJars are community integrations.
 
-These are demo snippets, not a runnable application. Imports and bean wiring are omitted. Use an injected `ChatClient.Builder`; configure the vector store, memory, and credentials for the demos you select. Examples have not been compiled or run.
+The examples focus on individual features; imports and bean wiring are omitted. They assume an injected `ChatClient.Builder` and configured services where needed. These snippets have not been compiled or run.
 
 [Full reference, setup details, and sources](docs/spring-ai-2x-reference.md).
 
-## Demo order
+## Walkthrough
 
-| Step | Show | Main point |
+| Step | Feature | What it adds |
 |---|---|---|
-| 1 | ChatClient + structured output | Text or Java objects from one fluent API |
+| 1 | ChatClient + structured output | Text, Java objects, and response context |
 | 2 | Tools + tool search | Call application code |
 | 3 | Memory | Remember an earlier turn |
 | 4 | Modular RAG | Answer using your documents |
@@ -23,27 +23,163 @@ These are demo snippets, not a runnable application. Imports and bean wiring are
 
 ## Setup
 
-Use a Spring Boot 4 application and the Spring AI BOM. Select modules for each demo:
+### Maven version management
 
-| Demo | Modules / prerequisites |
-|---|---|
-| Chat | `spring-ai-starter-model-openai` |
-| Tools | Chat starter; optional `spring-ai-starter-tool-search-advisor` |
-| Memory | Configured `ChatMemory` bean |
-| RAG | `spring-ai-rag`, vector store + embedding model; PDF reader for ingestion |
-| MCP | Server: `spring-ai-starter-mcp-server-webmvc`; client: `spring-ai-starter-mcp-client` |
-| Jev | `spring-ai-starter-typesafe` + `typesafe-spring-ai`, version `0.4.0` |
-| Skills | `spring-ai-agent-utils:0.13.0` + a SkillsJar dependency |
-| Preview sessions | `spring-ai-starter-model-session-jdbc` + a data source |
+> Start with a Spring Boot **4.0.x or 4.1.x** application. Add these sections to `pom.xml`; Spring Boot manages its own dependencies, and the Spring AI BOM manages `org.springframework.ai` modules.
+
+```xml
+<properties>
+    <spring-ai.version>2.0.2</spring-ai.version>
+</properties>
+
+<dependencyManagement>
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-bom</artifactId>
+            <version>${spring-ai.version}</version>
+            <type>pom</type>
+            <scope>import</scope>
+        </dependency>
+    </dependencies>
+</dependencyManagement>
+```
+
+### Chat, tools, and memory
+
+> Add this inside `<dependencies>`. It provides the OpenAI integration and auto-configured ChatClient builder. Basic tool calling and default in-memory chat memory need no additional starter.
+
+```xml
+<dependency>
+    <groupId>org.springframework.ai</groupId>
+    <artifactId>spring-ai-starter-model-openai</artifactId>
+</dependency>
+```
+
+> For the tool-search example, also add:
+
+```xml
+<dependency>
+    <groupId>org.springframework.ai</groupId>
+    <artifactId>spring-ai-starter-tool-search-advisor</artifactId>
+</dependency>
+```
+
+### Modular RAG and PDF ingestion
+
+> This example uses PostgreSQL with PGvector. Add these dependencies and configure a database with the required extensions. The OpenAI starter above supplies the embedding model.
+
+```xml
+<dependency>
+    <groupId>org.springframework.ai</groupId>
+    <artifactId>spring-ai-rag</artifactId>
+</dependency>
+<dependency>
+    <groupId>org.springframework.ai</groupId>
+    <artifactId>spring-ai-pdf-document-reader</artifactId>
+</dependency>
+<dependency>
+    <groupId>org.springframework.ai</groupId>
+    <artifactId>spring-ai-starter-vector-store-pgvector</artifactId>
+</dependency>
+<dependency>
+    <groupId>org.postgresql</groupId>
+    <artifactId>postgresql</artifactId>
+    <scope>runtime</scope>
+</dependency>
+```
+
+> For the reference guide's `QuestionAnswerAdvisor` example, also add `org.springframework.ai:spring-ai-vector-store-advisor`.
+
+### MCP server and client
+
+> Add the server starter to the **order-server application**:
+
+```xml
+<dependency>
+    <groupId>org.springframework.ai</groupId>
+    <artifactId>spring-ai-starter-mcp-server-webmvc</artifactId>
+</dependency>
+```
+
+> Add the client starter to the **support-assistant application**, alongside the model starter:
+
+```xml
+<dependency>
+    <groupId>org.springframework.ai</groupId>
+    <artifactId>spring-ai-starter-mcp-client</artifactId>
+</dependency>
+```
+
+### Jev and SkillsJars
+
+> Community libraries use explicit versions, independently of the Spring AI BOM. Add the dependencies for the features you use:
+
+```xml
+<!-- Jev: typed judgments, judges, and advisors -->
+<dependency>
+    <groupId>org.springaicommunity</groupId>
+    <artifactId>spring-ai-starter-typesafe</artifactId>
+    <version>0.4.0</version>
+</dependency>
+<dependency>
+    <groupId>org.springaicommunity</groupId>
+    <artifactId>typesafe-spring-ai</artifactId>
+    <version>0.4.0</version>
+</dependency>
+
+<!-- SkillsTool integration -->
+<dependency>
+    <groupId>org.springaicommunity</groupId>
+    <artifactId>spring-ai-agent-utils</artifactId>
+    <version>0.13.0</version>
+</dependency>
+
+<!-- Example packaged browser skill -->
+<dependency>
+    <groupId>com.skillsjars</groupId>
+    <artifactId>browser-use__browser-use__browser-use</artifactId>
+    <version>2026_02_23-1d154e1</version>
+</dependency>
+```
+
+### Preview session memory
+
+> For section 8, use the **2.1.0-RC1** Spring AI BOM with its compatible Spring Boot **4.2** preview baseline. Keep the preview setup separate from the stable examples. Add the JDBC session starter and a database driver; H2 is sufficient for a local example:
+
+```xml
+<dependency>
+    <groupId>org.springframework.ai</groupId>
+    <artifactId>spring-ai-starter-model-session-jdbc</artifactId>
+</dependency>
+<dependency>
+    <groupId>com.h2database</groupId>
+    <artifactId>h2</artifactId>
+    <scope>runtime</scope>
+</dependency>
+```
+
+### Application configuration
 
 ```properties
 spring.ai.openai.api-key=${OPENAI_API_KEY}
 spring.ai.openai.chat.model=gpt-5-mini
+
+# Jev examples
+spring.ai.typesafe.api-key=${TYPESAFE_API_KEY}
+
+# PGvector examples: provide a PostgreSQL database with vector support
+spring.datasource.url=${DATABASE_URL}
+spring.datasource.username=${DATABASE_USERNAME}
+spring.datasource.password=${DATABASE_PASSWORD}
+spring.ai.vectorstore.pgvector.initialize-schema=true
 ```
 
-Use a fresh builder for each client. `conversationId` must identify the current user's conversation.
+> Include only properties for the integrations you enable. Use a fresh builder for each client. `conversationId` identifies the current user's conversation.
 
-## 1. ChatClient: text, streaming, and Java objects
+> Dependency references: [Spring AI BOM](https://docs.spring.io/spring-ai/reference/getting-started.html), [PDF reader](https://docs.spring.io/spring-ai/reference/api/etl-pipeline.html#_pdf_page), [PGvector](https://docs.spring.io/spring-ai/reference/api/vectordbs/pgvector.html), [Jev](https://spring-ai-community.github.io/spring-ai-typesafe/latest/), [Agent Utils](https://github.com/spring-ai-community/spring-ai-agent-utils), [SkillsJars](https://www.skillsjars.com/docs).
+
+## 1. ChatClient: text, streaming, Java objects, and response context
 
 ```java
 ChatClient client = builder
@@ -59,7 +195,7 @@ Flux<String> stream = client.prompt()
     .stream().content();
 ```
 
-**Show:** a complete answer versus text arriving in chunks.
+> `call().content()` returns the complete answer. `stream().content()` returns a `Flux<String>` that the interface can display as chunks arrive.
 
 ```java
 record Ticket(String category, String summary) {}
@@ -72,7 +208,28 @@ Ticket ticket = client.prompt()
         .validateSchema());
 ```
 
-**Show:** `Ticket("PAYMENT", "Duplicate card charge")` as an illustrative result. Schema validation checks structure; factual and business checks remain separate.
+> An illustrative result is `Ticket("PAYMENT", "Duplicate card charge")`. The entity API maps the response into a Java record; schema validation checks its structure. Factual and business checks remain separate.
+
+### ChatClientResponse: model response and advisor context
+
+```java
+ChatClientResponse result = client.prompt()
+    .user("Explain refunds in one sentence.")
+    .call()
+    .chatClientResponse();
+
+ChatResponse modelResponse = result.chatResponse();
+if (modelResponse != null) {
+    System.out.println(modelResponse.getResult().getOutput().getText());
+    System.out.println(modelResponse.getMetadata().getUsage());
+}
+
+System.out.println(result.context());
+```
+
+> `chatClientResponse()` returns the model response together with the advisor execution context. `chatResponse()` exposes answer text and usage metadata; `context()` exposes data contributed by advisors, such as retrieved documents in a RAG flow. The context can be empty when no advisor adds data. The model response is nullable, so the example checks it before reading it.
+
+> Source: [ChatClient return types](https://docs.spring.io/spring-ai/reference/api/chatclient.html#_call_return_values), [ChatClientResponse API](https://docs.spring.io/spring-ai/docs/current/api/org/springframework/ai/chat/client/ChatClientResponse.html).
 
 ## 2. Tools: check an order
 
@@ -90,15 +247,15 @@ String answer = client.prompt()
     .call().content();
 ```
 
-**Show:** model requests a tool → Java executes → model explains the result. In 2.0, ChatClient's `ToolCallingAdvisor` manages this loop.
+> The model requests `deliveryStatus("A123")`, Spring AI executes the Java method, and the model uses its result to answer. In 2.0, ChatClient's `ToolCallingAdvisor` manages this loop.
 
-For a large tool catalog, add the tool-search starter and enable:
+> For a large tool catalog, add the tool-search starter and enable:
 
 ```properties
 spring.ai.chat.client.tool-search-advisor.enabled=true
 ```
 
-**Show:** relevant tools are discovered instead of sending the whole catalog with every request.
+> Tool search discovers relevant tools on demand, reducing the tool definitions included in each model request.
 
 ## 3. Memory: remember the order number
 
@@ -119,11 +276,11 @@ String answer = memoryClient.prompt()
     .call().content();
 ```
 
-**Show:** the follow-up can answer `A123`. This uses the 2.0 memory API; see the session replacement in the preview below.
+> Both requests use the same conversation ID, so the follow-up can recall `A123`. This uses the 2.0 memory API; the preview section introduces session memory.
 
 ## 4. Modular RAG: answer from a policy document
 
-Ingest once:
+> First, extract the PDF text, split it into chunks, and store their embeddings:
 
 ```java
 var reader = new PagePdfDocumentReader(
@@ -132,7 +289,7 @@ var splitter = TokenTextSplitter.builder().withChunkSize(800).build();
 vectorStore.add(splitter.apply(reader.get()));
 ```
 
-Retrieve context for each question:
+> Next, retrieve matching chunks and add them to the question before generation:
 
 ```java
 var rag = RetrievalAugmentationAdvisor.builder()
@@ -148,9 +305,9 @@ String answer = client.prompt()
     .call().content();
 ```
 
-**Show:** put a 30-day deadline in the PDF and inspect the answer against it. Adjust retrieval thresholds for your data.
+> If the PDF specifies a 30-day deadline, the retrieved context gives the model evidence for answering the 45-day question. The similarity threshold controls which matches qualify and should be tuned for the data.
 
-Optional query rewriting—add this to the advisor builder:
+> Optional query rewriting—add this to the advisor builder:
 
 ```java
 .queryTransformers(RewriteQueryTransformer.builder()
@@ -158,7 +315,7 @@ Optional query rewriting—add this to the advisor builder:
     .build())
 ```
 
-Optional filtered lookup:
+> Optional filtered lookup:
 
 ```java
 List<Document> matches = vectorStore.similaritySearch(
@@ -168,11 +325,11 @@ List<Document> matches = vectorStore.similaritySearch(
         .topK(3).build());
 ```
 
-**Show:** rewrite an informal query or restrict retrieval to documents tagged `country=DK`.
+> Query rewriting turns an informal question into a clearer search query. The metadata filter limits results to documents tagged `country=DK`.
 
 ## 5. MCP: expose the order lookup to another application
 
-Server component:
+> Server component:
 
 ```java
 @Component
@@ -185,19 +342,19 @@ class OrderMcpTools {
 }
 ```
 
-Server configuration:
+> Server configuration:
 
 ```properties
 spring.ai.mcp.server.protocol=STREAMABLE
 ```
 
-Client connection:
+> Client connection:
 
 ```properties
 spring.ai.mcp.client.streamable-http.connections.orders.url=http://localhost:8080
 ```
 
-Client request, using the configured MCP tool callback provider:
+> Client request, using the configured MCP tool callback provider:
 
 ```java
 String answer = client.prompt()
@@ -206,7 +363,7 @@ String answer = client.prompt()
     .call().content();
 ```
 
-**Show:** ChatClient → MCP client → order server. Run the client separately from the server. Configure endpoint security before exposing it beyond the local demo.
+> The request travels from ChatClient through the MCP client to the order server. The server executes the lookup and returns its result. Client and server run as separate applications; endpoint security is configured separately.
 
 ## 6. Jev: classify and evaluate
 
@@ -214,7 +371,7 @@ String answer = client.prompt()
 spring.ai.typesafe.api-key=${TYPESAFE_API_KEY}
 ```
 
-Classify a support ticket using the injected `TypeSafeClient`:
+> Classify a support ticket using the injected `TypeSafeClient`:
 
 ```java
 SystemOneResponse result = typeSafeClient.systemOne(
@@ -231,9 +388,9 @@ String route = result.choice("team").confidence() >= 0.80
     ? result.choiceValue("team") : "human-review";
 ```
 
-**Show:** typed decisions with a confidence-based review path. The threshold is an example policy, not a universal recommendation.
+> Jev returns typed judgments. This routing policy selects a department when confidence reaches `0.80` and otherwise requests human review. The threshold is an application choice.
 
-Judge an answer against supplied policy:
+> Judge an answer against supplied policy:
 
 ```java
 JevJudge judge = JevJudge.builder(typeSafeClient)
@@ -255,21 +412,13 @@ System.out.println(verdict.passed());
 System.out.println(verdict.feedback());
 ```
 
-**Show:** the conflicting answer should fail the check. Jev evaluates supplied content; the chat model generates the answer.
+> The answer claims 60 days while the supplied policy says 30, so the judgment should fail and provide feedback. Jev evaluates supplied content; the chat model generates the answer.
 
-[More Jev examples: retries, guardrails, RAG, and tool selection](docs/spring-ai-2x-reference.md#34-typesafe-jev-structured-judgment-with-java-examples).
+> [More Jev examples: retries, guardrails, RAG, and tool selection](docs/spring-ai-2x-reference.md#34-typesafe-jev-structured-judgment-with-java-examples).
 
 ## 7. SkillsJars: load instructions from a dependency
 
-Example published skill dependency, alongside Agent Utils:
-
-```xml
-<dependency>
-    <groupId>com.skillsjars</groupId>
-    <artifactId>browser-use__browser-use__browser-use</artifactId>
-    <version>2026_02_23-1d154e1</version>
-</dependency>
-```
+> The browser skill dependency from Setup supplies instructions under `META-INF/skills`.
 
 ```java
 ChatClient skillsClient = builder
@@ -284,13 +433,13 @@ String plan = skillsClient.prompt()
     .call().content();
 ```
 
-**Show:** dependency → skill metadata → instructions loaded on demand. This describes a workflow; actual browser execution requires browser tools and a runtime.
+> The JAR supplies skill metadata and instructions that load on demand. Here, the model describes a browser workflow. Executing it requires browser tools and a runtime.
 
-[Custom skill definition, packaging, and extraction](docs/spring-ai-2x-reference.md#35-skillsjars-package-agent-instructions-as-java-dependencies).
+> [Custom skill definition, packaging, and extraction](docs/spring-ai-2x-reference.md#35-skillsjars-package-agent-instructions-as-java-dependencies).
 
 ## 8. Spring AI 2.1 preview
 
-Use **2.1.0-RC1** dependencies for these snippets.
+> Use **2.1.0-RC1** dependencies for these snippets.
 
 ### Session memory
 
@@ -308,7 +457,7 @@ String answer = sessionClient.prompt()
     .call().content();
 ```
 
-**Show:** an event log with a compacted model view. Original events remain stored.
+> Session memory stores conversation events and builds a smaller view for the model. Compaction keeps recent complete turns while retaining the original event log.
 
 ### Tool confirmation
 
@@ -319,7 +468,7 @@ public String cancelOrder(String orderId) {
 }
 ```
 
-**Show:** requested action → pending decision → application approval UI → execution and resume. The annotation does not implement the UI or resumption.
+> A request to cancel an order pauses for a decision before execution. The application collects approval, executes allowed calls, and resumes the conversation. The annotation marks the requirement; the application provides the UI and resumption logic.
 
 ### Responses API
 
@@ -329,7 +478,7 @@ spring.ai.openai.responses.model=gpt-5-mini
 spring.ai.openai.responses.reasoning-effort=medium
 ```
 
-**Show:** use the same ChatClient API with the Responses integration.
+> These properties select the Responses integration while keeping the same ChatClient API.
 
 ### Chunk overlap
 
@@ -340,7 +489,7 @@ var splitter = TokenTextSplitter.builder()
     .build();
 ```
 
-**Show:** neighboring chunks share boundary context.
+> Each chunk repeats up to 100 tokens from the preceding chunk, preserving context near boundaries. Overlap counts toward the 800-token chunk size.
 
 ### Existing vectors
 
@@ -351,20 +500,20 @@ List<Document> matches = vectorStore.similaritySearch(
     queryEmbedding, SearchRequest.builder().topK(3).build());
 ```
 
-**Show:** import and query vectors without generating them again. Requires a supporting store and compatible embeddings.
+> `upsert` stores a document with its existing embedding. The search accepts an existing query vector. Both operations require a supporting store and compatible embeddings.
 
-## Optional demos
+## Additional capabilities
 
-| Feature | Quick demonstration |
+| Feature | Behavior |
 |---|---|
-| Semantic cache | Ask equivalent policy questions and inspect whether the second hits the cache |
-| Observability | Inspect `response.getMetadata().getUsage()` and model/tool traces |
-| Message parts, preview | Inspect `response.getResult().getOutput().getParts()` |
-| Audio/image | Transcribe a recording, stream speech, or generate a help illustration |
+| Semantic cache | Equivalent questions can reuse a cached answer when similarity meets the configured threshold |
+| Observability | `response.getMetadata().getUsage()` exposes usage; configured tracing records model and tool operations |
+| Message parts, preview | `response.getResult().getOutput().getParts()` exposes ordered content parts |
+| Audio/image | Supported models transcribe recordings, stream speech, or generate images |
 
 ## What's next
 
-**2.1 GA target: 19 November 2026**, subject to change. The announced focus is stabilizing session memory and message parts. Legacy chat-memory APIs are deprecated in the preview for planned removal in 3.0.
+> **2.1 GA target: 19 November 2026**, subject to change. The announced focus is stabilizing session memory and message parts. Legacy chat-memory APIs are deprecated in the preview for planned removal in 3.0.
 
 ## Links
 
