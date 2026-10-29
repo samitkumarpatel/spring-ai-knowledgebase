@@ -1,12 +1,15 @@
 # Spring AI 2.x: A Step-by-Step Walkthrough
 
-Build a store support assistant step by step: generate answers, call tools, retrieve policy documents, and evaluate responses.
+| Version | Release Date | Status |
+|---|---|---|
+| 1.0.0 GA | May 20, 2025 | Released |
+| 1.1.0 GA | Nov 12, 2025 | Released |
+| 2.0.0 GA | Jun 12, 2026 | Released |
+| 2.0.1 | Aug 21, 2026 | Released |
+| **2.0.2** | **Oct 23, 2026** | Released (current) |
+| 2.1.0-RC1 | Oct 23, 2026 | Released, release candidate |
+| 2.1.0 GA | Not announced | Upcoming (likely Nov–Dec 2026, my estimate) |
 
-**Versions checked: 28 October 2026.** Stable: **2.0.2**. Preview: **2.1.0-RC1**. Jev and SkillsJars are community integrations.
-
-The examples focus on individual features; imports and bean wiring are omitted. They assume an injected `ChatClient.Builder` and configured services where needed. These snippets have not been compiled or run.
-
-[Full reference, setup details, and sources](docs/spring-ai-2x-reference.md).
 
 ## Walkthrough
 
@@ -25,8 +28,6 @@ The examples focus on individual features; imports and bean wiring are omitted. 
 
 ### Maven version management
 
-> Start with a Spring Boot **4.0.x or 4.1.x** application. Add these sections to `pom.xml`; Spring Boot manages its own dependencies, and the Spring AI BOM manages `org.springframework.ai` modules.
-
 ```xml
 <properties>
     <spring-ai.version>2.0.2</spring-ai.version>
@@ -34,84 +35,111 @@ The examples focus on individual features; imports and bean wiring are omitted. 
 
 <dependencyManagement>
     <dependencies>
-        <dependency>
-            <groupId>org.springframework.ai</groupId>
-            <artifactId>spring-ai-bom</artifactId>
-            <version>${spring-ai.version}</version>
-            <type>pom</type>
-            <scope>import</scope>
-        </dependency>
+      <dependency>
+        <groupId>org.springframework.ai</groupId>
+        <artifactId>spring-ai-bom</artifactId>
+        <version>${spring-ai.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
     </dependencies>
-</dependencyManagement>
+  </dependencyManagement>
 ```
 
-### Chat, tools, and memory
+## Chat, tools, and memory
 
-> Add this inside `<dependencies>`. It provides the OpenAI integration and auto-configured ChatClient builder. Basic tool calling and default in-memory chat memory need no additional starter.
+### Chat models
 
-```xml
-<dependency>
-    <groupId>org.springframework.ai</groupId>
-    <artifactId>spring-ai-starter-model-openai</artifactId>
-</dependency>
-```
+| ID | Provider |
+|---|---|
+| `spring-ai-openai` | OpenAI (ChatGPT, DALL-E) |
+| `spring-ai-anthropic` | Anthropic Claude |
+| `spring-ai-google-genai` | Google GenAI (Gemini) |
+| `spring-ai-bedrock-converse` | Amazon Bedrock Converse (tool calling, multimodal, streaming) |
+| `spring-ai-mistral` | Mistral AI |
+| `spring-ai-deepseek` | DeepSeek |
+| `spring-ai-ollama` | Ollama (local LLMs) |
 
-> For the tool-search example, also add:
+Non-chat model starters in the same group:
+- `spring-ai-stabilityai`: text-to-image
+- `spring-ai-elevenlabs`: text-to-speech
 
-```xml
-<dependency>
-    <groupId>org.springframework.ai</groupId>
-    <artifactId>spring-ai-starter-tool-search-advisor</artifactId>
-</dependency>
-```
+### Tools (MCP server & Client)
 
-### Modular RAG and PDF ingestion
+| ID | Purpose |
+|---|---|
+| `spring-ai-mcp-client` | MCP client support |
+| `spring-ai-mcp-server` | MCP server support |
+| `mcp-security` | Security for MCP server/client and OAuth2 Authorization Server (experimental) |
+| `spring-ai-tool-search-advisor` | Dynamic tool discovery through a search index |
 
-> This example uses PostgreSQL with PGvector. Add these dependencies and configure a database with the required extensions. The OpenAI starter above supplies the embedding model.
+Initializr has no dependency for plain `@Tool` function calling. It is part of the core chat client, so any chat model starter includes it. 
 
-```xml
-<dependency>
-    <groupId>org.springframework.ai</groupId>
-    <artifactId>spring-ai-rag</artifactId>
-</dependency>
-<dependency>
-    <groupId>org.springframework.ai</groupId>
-    <artifactId>spring-ai-pdf-document-reader</artifactId>
-</dependency>
-<dependency>
-    <groupId>org.springframework.ai</groupId>
-    <artifactId>spring-ai-starter-vector-store-pgvector</artifactId>
-</dependency>
-<dependency>
-    <groupId>org.postgresql</groupId>
-    <artifactId>postgresql</artifactId>
-    <scope>runtime</scope>
-</dependency>
-```
+### Memory (chat memory repositories)
 
-> For the reference guide's `QuestionAnswerAdvisor` example, also add `org.springframework.ai:spring-ai-vector-store-advisor`.
+| ID | Backing store |
+|---|---|
+| `spring-ai-chat-memory-repository-in-memory` | In-memory |
+| `spring-ai-chat-memory-repository-jdbc` | JDBC (any relational DB) |
+| `spring-ai-chat-memory-repository-cassandra` | Cassandra |
+| `spring-ai-chat-memory-repository-mongodb` | MongoDB |
+| `spring-ai-chat-memory-repository-neo4j` | Neo4j |
+| `spring-ai-chat-memory-repository-redis` | Redis |
 
-### MCP server and client
+## Modular RAG / ETL
+[Modular RAG Video](https://www.youtube.com/watch?v=yQQEnXRMvUA&t=1390s)
 
-> Add the server starter to the **order-server application**:
+There is no separate "Modular RAG" dependency on Initializr. The RAG pieces (`RetrievalAugmentationAdvisor`, query transformers, document retrievers) ship in Spring AI core and the chat client modules, so any model starter brings them in. 
 
-```xml
-<dependency>
-    <groupId>org.springframework.ai</groupId>
-    <artifactId>spring-ai-starter-mcp-server-webmvc</artifactId>
-</dependency>
-```
+### Document readers (ingestion / ETL)
 
-> Add the client starter to the **support-assistant application**, alongside the model starter:
+| ID | Purpose |
+|---|---|
+| `spring-ai-pdf-document-reader` | PDF text via PDFBox |
+| `spring-ai-tika-document-reader` | PDF, Office and HTML via Apache Tika |
+| `spring-ai-markdown-document-reader` | Markdown files |
+| `spring-ai-jsoup-document-reader` | HTML via JSoup |
 
-```xml
-<dependency>
-    <groupId>org.springframework.ai</groupId>
-    <artifactId>spring-ai-starter-mcp-client</artifactId>
-</dependency>
-```
+### Vector stores
 
-### Jev and SkillsJars
+| ID | Store |
+|---|---|
+| `spring-ai-vectordb-pgvector` | PostgreSQL with PGvector |
+| `spring-ai-vectordb-chroma` | Chroma |
+| `spring-ai-vectordb-qdrant` | Qdrant |
+| `spring-ai-vectordb-milvus` | Milvus |
+| `spring-ai-vectordb-weaviate` | Weaviate |
+| `spring-ai-vectordb-pinecone` | Pinecone |
+| `spring-ai-vectordb-redis` | Redis Search and Query |
+| `spring-ai-vectordb-elasticsearch` | Elasticsearch |
+| `spring-ai-vectordb-opensearch` | OpenSearch |
+| `spring-ai-vectordb-aws-opensearch` | AWS OpenSearch |
+| `spring-ai-vectordb-mongodb-atlas` | MongoDB Atlas |
+| `spring-ai-vectordb-neo4j` | Neo4j |
+| `spring-ai-vectordb-cassandra` | Cassandra |
+| `spring-ai-vectordb-couchbase` | Couchbase |
+| `spring-ai-vectordb-oracle` | Oracle 23ai |
+| `spring-ai-vectordb-mariadb` | MariaDB |
+| `spring-ai-vectordb-azure` | Azure AI Search |
+| `spring-ai-vectordb-gemfire` | GemFire |
+| `spring-ai-vectordb-typesense` | Typesense |
+| `spring-ai-vectordb-s3` | AWS S3 |
+| `spring-ai-vectordb-bedrock-knowledgebase` | Amazon Bedrock Knowledge Base (managed RAG) |
+
+### Embedding models
+
+| ID | Provider |
+|---|---|
+| `spring-ai-transformers` | Local ONNX embeddings |
+| `spring-ai-vertexai-embeddings` | Vertex AI |
+| `spring-ai-google-genai-embedding` | Google GenAI |
+| `spring-ai-bedrock` | Bedrock (Cohere, Titan) |
+| `spring-ai-postgresml` | PostgresML |
+
+The chat models (`spring-ai-openai`, `spring-ai-ollama`, `spring-ai-mistral` and others) also provide embeddings.
+
+
+### Jev 
 
 > Community libraries use explicit versions, independently of the Spring AI BOM. Add the dependencies for the features you use:
 
@@ -127,7 +155,12 @@ The examples focus on individual features; imports and bean wiring are omitted. 
     <artifactId>typesafe-spring-ai</artifactId>
     <version>0.4.0</version>
 </dependency>
+```
 
+### SkillsJars
+[skillsjars](https://www.skillsjars.com/docs)
+
+```xml
 <!-- SkillsTool integration -->
 <dependency>
     <groupId>org.springaicommunity</groupId>
@@ -143,9 +176,9 @@ The examples focus on individual features; imports and bean wiring are omitted. 
 </dependency>
 ```
 
-### Preview session memory
+### session memory (Preview)
 
-> For section 8, use the **2.1.0-RC1** Spring AI BOM with its compatible Spring Boot **4.2** preview baseline. Keep the preview setup separate from the stable examples. Add the JDBC session starter and a database driver; H2 is sufficient for a local example:
+> Use the **2.1.0-RC1** Spring AI BOM with its compatible Spring Boot **4.2** preview baseline. Keep the preview setup separate from the stable examples. Add the JDBC session starter and a database driver; H2 is sufficient for a local example:
 
 ```xml
 <dependency>
@@ -158,26 +191,6 @@ The examples focus on individual features; imports and bean wiring are omitted. 
     <scope>runtime</scope>
 </dependency>
 ```
-
-### Application configuration
-
-```properties
-spring.ai.openai.api-key=${OPENAI_API_KEY}
-spring.ai.openai.chat.model=gpt-5-mini
-
-# Jev examples
-spring.ai.typesafe.api-key=${TYPESAFE_API_KEY}
-
-# PGvector examples: provide a PostgreSQL database with vector support
-spring.datasource.url=${DATABASE_URL}
-spring.datasource.username=${DATABASE_USERNAME}
-spring.datasource.password=${DATABASE_PASSWORD}
-spring.ai.vectorstore.pgvector.initialize-schema=true
-```
-
-> Include only properties for the integrations you enable. Use a fresh builder for each client. `conversationId` identifies the current user's conversation.
-
-> Dependency references: [Spring AI BOM](https://docs.spring.io/spring-ai/reference/getting-started.html), [PDF reader](https://docs.spring.io/spring-ai/reference/api/etl-pipeline.html#_pdf_page), [PGvector](https://docs.spring.io/spring-ai/reference/api/vectordbs/pgvector.html), [Jev](https://spring-ai-community.github.io/spring-ai-typesafe/latest/), [Agent Utils](https://github.com/spring-ai-community/spring-ai-agent-utils), [SkillsJars](https://www.skillsjars.com/docs).
 
 ## 1. ChatClient: text, streaming, Java objects, and response context
 
@@ -210,7 +223,7 @@ Ticket ticket = client.prompt()
 
 > An illustrative result is `Ticket("PAYMENT", "Duplicate card charge")`. The entity API maps the response into a Java record; schema validation checks its structure. Factual and business checks remain separate.
 
-### ChatClientResponse: model response and advisor context
+- ChatClient Response
 
 ```java
 ChatClientResponse result = client.prompt()
