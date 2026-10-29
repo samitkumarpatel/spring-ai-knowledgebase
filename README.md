@@ -1,4 +1,4 @@
-# Spring AI 2.x: A Step-by-Step Walkthrough
+# Spring AI: A Step-by-Step Walkthrough
 
 | Version | Release Date | Status |
 |---|---|---|
@@ -7,19 +7,18 @@
 | 2.0.0 GA | Jun 12, 2026 | Released |
 | 2.0.1 | Aug 21, 2026 | Released |
 | **2.0.2** | **Oct 23, 2026** | Released (current) |
-| 2.1.0-RC1 | Oct 23, 2026 | Released, release candidate |
-| 2.1.0 GA | Not announced | Upcoming (likely Nov–Dec 2026, my estimate) |
-
+| 2.1.0-RC1 | Oct 23, 2026 | Released, release candidate (same day as 2.0.2) |
+| 2.1.0 GA | TBD | Upcoming, date not announced |
 
 ## Walkthrough
 
 | Step | Feature | What it adds |
 |---|---|---|
-| 1 | ChatClient + structured output | Text, Java objects, and response context |
-| 2 | Tools + tool search | Call application code |
-| 3 | Memory | Remember an earlier turn |
-| 4 | Modular RAG | Answer using your documents |
-| 5 | MCP | Expose and consume remote tools |
+| 1 | ChatClient + structured output | Text, streaming, Java objects, and response context |
+| 2 | Tools + tool search | The model calls your Java methods with `@Tool`, and Spring AI runs them and feeds results back; with a large catalog, tool search sends only the relevant tool definitions |
+| 3 | MCP | Expose and consume remote tools, resources, prompts, and app UIs |
+| 4 | Memory | Remember an earlier turn |
+| 5 | Modular RAG | Answer using your documents |
 | 6 | Jev | Classify requests and judge answers |
 | 7 | SkillsJars | Load reusable instructions from a dependency |
 | 8 | 2.1 preview | Sessions, confirmation, Responses, and vectors |
@@ -35,24 +34,37 @@
 
 <dependencyManagement>
     <dependencies>
-      <dependency>
-        <groupId>org.springframework.ai</groupId>
-        <artifactId>spring-ai-bom</artifactId>
-        <version>${spring-ai.version}</version>
-        <type>pom</type>
-        <scope>import</scope>
-      </dependency>
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-bom</artifactId>
+            <version>${spring-ai.version}</version>
+            <type>pom</type>
+            <scope>import</scope>
+        </dependency>
     </dependencies>
-  </dependencyManagement>
+</dependencyManagement>
 ```
 
-## Chat, tools, and memory
+> In the dependency tables, IDs are start.spring.io IDs. The Maven artifactId differs for most starters, for example `spring-ai-openai` is `org.springframework.ai:spring-ai-starter-model-openai`. Versions come from the Spring AI BOM.
 
-### Chat models
+## Examples
+
+### 1. ChatClient: text, streaming, Java objects, and response context
+
+**Dependencies**: one chat model starter (swap in any provider from the table below):
+
+```xml
+<dependency>
+    <groupId>org.springframework.ai</groupId>
+    <artifactId>spring-ai-starter-model-openai</artifactId>
+</dependency>
+```
+
+**Chat models**
 
 | ID | Provider |
 |---|---|
-| `spring-ai-openai` | OpenAI (ChatGPT, DALL-E) |
+| `spring-ai-openai` | OpenAI (ChatGPT, DALL-E), Azure OpnAI |
 | `spring-ai-anthropic` | Anthropic Claude |
 | `spring-ai-google-genai` | Google GenAI (Gemini) |
 | `spring-ai-bedrock-converse` | Amazon Bedrock Converse (tool calling, multimodal, streaming) |
@@ -64,18 +76,203 @@ Non-chat model starters in the same group:
 - `spring-ai-stabilityai`: text-to-image
 - `spring-ai-elevenlabs`: text-to-speech
 
-### Tools (MCP server & Client)
+```java
+ChatClient client = builder
+    .defaultSystem("You are a store support assistant. Keep answers brief.")
+    .build();
+
+String answer = client.prompt()
+    .user("Explain refunds in one sentence.")
+    .call().content(); //returns the complete answer
+
+Flux<String> stream = client.prompt()
+    .user("Explain the return process.")
+    .stream().content(); //returns a Stream
+
+
+/*The entity API maps the response into a Java record; schema validation checks its structure. Factual and business checks remain separate.*/
+
+record Ticket(String category, String summary) {}
+
+Ticket ticket = client.prompt()
+    .user("My card was charged twice.")
+    .call()
+    .entity(Ticket.class, spec -> spec
+        .useProviderStructuredOutput()
+        .validateSchema()); // Ticket("PAYMENT", "Duplicate card charge")
+```
+
+**ChatClientResponse** - to get response context
+
+```java
+ChatClientResponse result = client.prompt()
+    .user("Explain refunds in one sentence.")
+    .call()
+    .chatClientResponse();
+
+ChatResponse modelResponse = result.chatResponse();
+if (modelResponse != null) {
+    System.out.println(modelResponse.getResult().getOutput().getText());
+    System.out.println(modelResponse.getMetadata().getUsage());
+}
+
+System.out.println(result.context());
+```
+
+> Explore More: [ChatClient return types](https://docs.spring.io/spring-ai/reference/api/chatclient.html#_call_return_values), [ChatClientResponse API](https://docs.spring.io/spring-ai/docs/current/api/org/springframework/ai/chat/client/ChatClientResponse.html).
+
+### 2. Tools and tool search
+
+**Dependencies**: none beyond the chat model starter from step 1, because `@Tool` is part of the core chat client. Tool search adds one starter:
+
+```xml
+<dependency>
+    <groupId>org.springframework.ai</groupId>
+    <artifactId>spring-ai-starter-tool-search-advisor</artifactId>
+</dependency>
+```
+
+**Tool search**
 
 | ID | Purpose |
 |---|---|
-| `spring-ai-mcp-client` | MCP client support |
-| `spring-ai-mcp-server` | MCP server support |
-| `mcp-security` | Security for MCP server/client and OAuth2 Authorization Server (experimental) |
 | `spring-ai-tool-search-advisor` | Dynamic tool discovery through a search index |
 
-Initializr has no dependency for plain `@Tool` function calling. It is part of the core chat client, so any chat model starter includes it. 
+```java
+class OrderTools {
+    @Tool(description = "Look up an order's delivery status")
+    public String deliveryStatus(String orderId) {
+        return "Order " + orderId + " arrives Friday.";
+    }
+}
 
-### Memory (chat memory repositories)
+String answer = client.prompt()
+    .user("When will order A123 arrive?")
+    .tools(new OrderTools())
+    .call().content();
+```
+
+> The model requests `deliveryStatus("A123")`, Spring AI executes the Java method, and the model uses its result to answer. In 2.0, ChatClient's `ToolCallingAdvisor` manages this loop.
+
+> For a large tool catalog, add the tool-search starter and enable:
+
+```properties
+spring.ai.chat.client.tool-search-advisor.enabled=true
+```
+
+> Tool search discovers relevant tools on demand, reducing the tool definitions included in each model request. It uses `ToolSearchToolCallingAdvisor`, which indexes the tool set once per session and gives the model a built-in `toolSearchTool` to retrieve relevant tools by natural-language query.
+
+### 3. Remote tools, resources, prompts, and apps (MCP)
+
+**Dependencies**: the server application needs the MCP server starter; the application that calls it needs the client starter (plus a chat model). Add `mcp-security` (listed in the table below) to secure the endpoints.
+
+```xml
+<!-- MCP server application -->
+<dependency>
+    <groupId>org.springframework.ai</groupId>
+    <artifactId>spring-ai-starter-mcp-server</artifactId>
+</dependency>
+
+<!-- Application that consumes the MCP server -->
+<dependency>
+    <groupId>org.springframework.ai</groupId>
+    <artifactId>spring-ai-starter-mcp-client</artifactId>
+</dependency>
+```
+
+Other dependency 
+
+| ID | Purpose |
+|---|---|
+| `mcp-security` | Security for MCP server/client and OAuth2 Authorization Server (experimental) |
+
+> Server component: a tool, two resources, an app UI, and a prompt, all exposed from another application:
+
+```java
+@Component
+class OrderMcpTools {
+
+    // Tool: the model calls it
+    @McpTool(description = "Look up delivery status")
+    public String deliveryStatus(
+            @McpToolParam(required = true) String orderId) {
+        return "Order " + orderId + " arrives Friday.";
+    }
+
+    // Resource: read-only data, fixed URI
+    @McpResource(uri = "config://delivery/carriers", name = "carriers",
+            description = "Supported carriers", mimeType = "application/json")
+    public String carriers() {
+        return "[\"GLS\", \"DHL\", \"FEDEX\"]";
+    }
+
+    // Resource template: {orderId} binds to the method parameter
+    @McpResource(uri = "delivery://orders/{orderId}", name = "order",
+            description = "Order details by id", mimeType = "application/json")
+    public String order(String orderId) {
+        return "{\"orderId\":\"" + orderId + "\",\"status\":\"IN_TRANSIT\"}";
+    }
+
+    // App UI (MCP Apps): an HTML page served as a ui:// resource
+    @McpResource(uri = "ui://delivery/tracker", name = "delivery_tracker_ui",
+            description = "Tracking dashboard", mimeType = "text/html;profile=mcp-app")
+    public String trackerUi() {
+        return "<!doctype html><html><body><h3>Delivery tracker</h3></body></html>";
+    }
+
+    // Prompt: a reusable template the client can offer to the user
+    @McpPrompt(name = "delay_email", description = "Draft a delay notice to a customer")
+    public GetPromptResult delayEmail(
+            @McpArg(name = "customer", required = true) String customer,
+            @McpArg(name = "orderId", required = true) String orderId) {
+        var text = "Write a polite email to " + customer
+                + " explaining that order " + orderId + " is delayed.";
+        return GetPromptResult.builder(List.of(
+                new PromptMessage(Role.USER, TextContent.builder(text).build())))
+            .build();
+    }
+}
+```
+
+> The annotations come from `mcp-annotations` via `spring-ai-mcp-server`. `@McpTool`, `@McpResource`, and `@McpPrompt` accept a `metaProvider` attribute that supplies the `_meta` field of the declaration. That is the route for linking a tool to the `ui://` resource. The Spring AI MCP annotations documentation does not cover MCP Apps or `ui://`, so confirm host support and the `_meta` shape for your version before relying on it. Details: [MCP annotations](https://docs.spring.io/spring-ai/reference/api/mcp/mcp-annotations-server.html).
+
+> Server configuration:
+
+```properties
+spring.ai.mcp.server.protocol=STREAMABLE
+```
+
+> Client connection:
+
+```properties
+spring.ai.mcp.client.streamable-http.connections.orders.url=http://localhost:8080
+```
+
+> Client request, using the configured MCP tool callback provider:
+
+```java
+String answer = client.prompt()
+    .user("When will order A123 arrive?")
+    .toolCallbacks(mcpToolCallbackProvider.getToolCallbacks())
+    .call().content();
+```
+
+> The request travels from ChatClient through the MCP client to the order server. The server executes the lookup and returns its result. Client and server run as separate applications; endpoint security is configured separately.
+
+> `toolCallbacks` carries tools only. Resources, prompts, and the app UI are handled by the MCP client or host, and are not inserted into every ChatClient call automatically.
+
+### 4. Memory
+
+**Dependencies**: none for the default in-memory store. For durable memory, add one repository starter, for example JDBC (other stores are in the table below):
+
+```xml
+<dependency>
+    <groupId>org.springframework.ai</groupId>
+    <artifactId>spring-ai-starter-model-chat-memory-repository-jdbc</artifactId>
+</dependency>
+```
+
+**Memory (chat memory repositories)**
 
 | ID | Backing store |
 |---|---|
@@ -86,12 +283,52 @@ Initializr has no dependency for plain `@Tool` function calling. It is part of t
 | `spring-ai-chat-memory-repository-neo4j` | Neo4j |
 | `spring-ai-chat-memory-repository-redis` | Redis |
 
-## Modular RAG / ETL
+> In 2.1.0-RC1, `ChatMemory`, `MessageWindowChatMemory`, `MessageChatMemoryAdvisor`, `ChatMemoryRepository`, and these repositories are deprecated for removal in 3.0.0. Session memory (see the preview below) replaces them.
+
+```java
+ChatClient memoryClient = builder
+    .defaultAdvisors(
+        MessageChatMemoryAdvisor.builder(chatMemory).build())
+    .build();
+
+memoryClient.prompt()
+    .user("My order number is A123.")
+    .advisors(a -> a.param(ChatMemory.CONVERSATION_ID, conversationId))
+    .call().content();
+
+String answer = memoryClient.prompt()
+    .user("What order number did I give you?")
+    .advisors(a -> a.param(ChatMemory.CONVERSATION_ID, conversationId))
+    .call().content();
+```
+
+> `chatMemory` is the `ChatMemory` bean that Spring AI auto-configures (in-memory repository and a 20-message window by default; another repository on the classpath, such as JDBC, replaces the in-memory one). The conversation ID is required on every call; a call without it throws `IllegalArgumentException`.
+
+> Both requests use the same conversation ID, so the follow-up can recall `A123`. This uses the 2.0 memory API, which is deprecated for removal in 3.0.0; the preview section introduces session memory.
+
+### 5. Modular RAG
+
+**Dependencies**: a document reader and a vector store, plus an embedding model (the chat starter from step 1 usually provides one). The RAG classes themselves ship with the chat starters. Swap in other readers, stores, or embedding models from the tables below.
+
+```xml
+<!-- PDF reader (or spring-ai-tika-document-reader for Office and HTML) -->
+<dependency>
+    <groupId>org.springframework.ai</groupId>
+    <artifactId>spring-ai-pdf-document-reader</artifactId>
+</dependency>
+
+<!-- Vector store: PostgreSQL with PGvector -->
+<dependency>
+    <groupId>org.springframework.ai</groupId>
+    <artifactId>spring-ai-starter-vector-store-pgvector</artifactId>
+</dependency>
+```
+
+There is no separate "Modular RAG" dependency on Initializr. The RAG pieces (`RetrievalAugmentationAdvisor`, query transformers, document retrievers) ship in Spring AI core and the chat client modules (`spring-ai-rag`), so any model starter brings them in.
+
 [Modular RAG Video](https://www.youtube.com/watch?v=yQQEnXRMvUA&t=1390s)
 
-There is no separate "Modular RAG" dependency on Initializr. The RAG pieces (`RetrievalAugmentationAdvisor`, query transformers, document retrievers) ship in Spring AI core and the chat client modules, so any model starter brings them in. 
-
-### Document readers (ingestion / ETL)
+**Document readers (ingestion / ETL)**
 
 | ID | Purpose |
 |---|---|
@@ -100,7 +337,7 @@ There is no separate "Modular RAG" dependency on Initializr. The RAG pieces (`Re
 | `spring-ai-markdown-document-reader` | Markdown files |
 | `spring-ai-jsoup-document-reader` | HTML via JSoup |
 
-### Vector stores
+**Vector stores**
 
 | ID | Store |
 |---|---|
@@ -126,7 +363,7 @@ There is no separate "Modular RAG" dependency on Initializr. The RAG pieces (`Re
 | `spring-ai-vectordb-s3` | AWS S3 |
 | `spring-ai-vectordb-bedrock-knowledgebase` | Amazon Bedrock Knowledge Base (managed RAG) |
 
-### Embedding models
+**Embedding models**
 
 | ID | Provider |
 |---|---|
@@ -138,10 +375,100 @@ There is no separate "Modular RAG" dependency on Initializr. The RAG pieces (`Re
 
 The chat models (`spring-ai-openai`, `spring-ai-ollama`, `spring-ai-mistral` and others) also provide embeddings.
 
+**1. Load documents (ingestion)**
 
-### Jev 
+```java
+var docs = new PagePdfDocumentReader("classpath:/docs/handbook.pdf").get();
+var chunks = new TokenTextSplitter().apply(docs);
+vectorStore.add(chunks);
+```
 
-> Community libraries use explicit versions, independently of the Spring AI BOM. Add the dependencies for the features you use:
+**2. Configure retrieval**
+
+```java
+@Configuration
+class RagConfig {
+
+    @Bean
+    ChatClient chatClient(ChatClient.Builder builder, VectorStore vectorStore) {
+
+        var retriever = VectorStoreDocumentRetriever.builder()
+                .vectorStore(vectorStore)
+                .similarityThreshold(0.50)
+                .topK(4)
+                .build();
+
+        var ragAdvisor = RetrievalAugmentationAdvisor.builder()
+                .documentRetriever(retriever)
+                .queryAugmenter(ContextualQueryAugmenter.builder()
+                        .allowEmptyContext(true) // answer even if nothing is retrieved
+                        .build())
+                .build();
+
+        return builder
+                .defaultAdvisors(ragAdvisor, new SimpleLoggerAdvisor())
+                .build();
+    }
+}
+```
+
+> `allowEmptyContext` defaults to `false`, in which case the model is told not to answer when nothing is retrieved.
+
+**3. Ask a question**
+
+```java
+@RestController
+class AskController {
+
+    private final ChatClient chatClient;
+
+    AskController(ChatClient chatClient) {
+        this.chatClient = chatClient;
+    }
+
+    @GetMapping("/ask")
+    String ask(@RequestParam String q) {
+        return chatClient.prompt()
+                .user(q)
+                .call()
+                .content();
+    }
+}
+```
+
+**Per-request advisor (instead of default)**
+
+```java
+// ragAdvisor is built as in the configuration above
+String answer = chatClient.prompt()
+        .advisors(ragAdvisor)
+        .user(q)
+        .call()
+        .content();
+```
+
+**Optional modular pieces**
+
+Add these to `RetrievalAugmentationAdvisor.builder()` for the "modular" part:
+
+```java
+.queryTransformers(
+    RewriteQueryTransformer.builder()
+        .chatClientBuilder(builder.build().mutate())
+        .build())
+.queryExpander(
+    MultiQueryExpander.builder()
+        .chatClientBuilder(builder.build().mutate())
+        .numberOfQueries(3)
+        .build())
+.documentJoiner(new ConcatenationDocumentJoiner())
+```
+
+> A low model temperature (for example `0.0`) on the builder gives more deterministic query rewrites.
+
+### 6. Jev: classify and evaluate
+
+**Dependencies**: community libraries use explicit versions, independently of the Spring AI BOM. Jev requires Spring AI **2.0.1+**.
 
 ```xml
 <!-- Jev: typed judgments, judges, and advisors -->
@@ -156,229 +483,6 @@ The chat models (`spring-ai-openai`, `spring-ai-ollama`, `spring-ai-mistral` and
     <version>0.4.0</version>
 </dependency>
 ```
-
-### SkillsJars
-[skillsjars](https://www.skillsjars.com/docs)
-
-```xml
-<!-- SkillsTool integration -->
-<dependency>
-    <groupId>org.springaicommunity</groupId>
-    <artifactId>spring-ai-agent-utils</artifactId>
-    <version>0.13.0</version>
-</dependency>
-
-<!-- Example packaged browser skill -->
-<dependency>
-    <groupId>com.skillsjars</groupId>
-    <artifactId>browser-use__browser-use__browser-use</artifactId>
-    <version>2026_02_23-1d154e1</version>
-</dependency>
-```
-
-### session memory (Preview)
-
-> Use the **2.1.0-RC1** Spring AI BOM with its compatible Spring Boot **4.2** preview baseline. Keep the preview setup separate from the stable examples. Add the JDBC session starter and a database driver; H2 is sufficient for a local example:
-
-```xml
-<dependency>
-    <groupId>org.springframework.ai</groupId>
-    <artifactId>spring-ai-starter-model-session-jdbc</artifactId>
-</dependency>
-<dependency>
-    <groupId>com.h2database</groupId>
-    <artifactId>h2</artifactId>
-    <scope>runtime</scope>
-</dependency>
-```
-
-## 1. ChatClient: text, streaming, Java objects, and response context
-
-```java
-ChatClient client = builder
-    .defaultSystem("You are a store support assistant. Keep answers brief.")
-    .build();
-
-String answer = client.prompt()
-    .user("Explain refunds in one sentence.")
-    .call().content();
-
-Flux<String> stream = client.prompt()
-    .user("Explain the return process.")
-    .stream().content();
-```
-
-> `call().content()` returns the complete answer. `stream().content()` returns a `Flux<String>` that the interface can display as chunks arrive.
-
-```java
-record Ticket(String category, String summary) {}
-
-Ticket ticket = client.prompt()
-    .user("My card was charged twice.")
-    .call()
-    .entity(Ticket.class, spec -> spec
-        .useProviderStructuredOutput()
-        .validateSchema());
-```
-
-> An illustrative result is `Ticket("PAYMENT", "Duplicate card charge")`. The entity API maps the response into a Java record; schema validation checks its structure. Factual and business checks remain separate.
-
-- ChatClient Response
-
-```java
-ChatClientResponse result = client.prompt()
-    .user("Explain refunds in one sentence.")
-    .call()
-    .chatClientResponse();
-
-ChatResponse modelResponse = result.chatResponse();
-if (modelResponse != null) {
-    System.out.println(modelResponse.getResult().getOutput().getText());
-    System.out.println(modelResponse.getMetadata().getUsage());
-}
-
-System.out.println(result.context());
-```
-
-> `chatClientResponse()` returns the model response together with the advisor execution context. `chatResponse()` exposes answer text and usage metadata; `context()` exposes data contributed by advisors, such as retrieved documents in a RAG flow. The context can be empty when no advisor adds data. The model response is nullable, so the example checks it before reading it.
-
-> Source: [ChatClient return types](https://docs.spring.io/spring-ai/reference/api/chatclient.html#_call_return_values), [ChatClientResponse API](https://docs.spring.io/spring-ai/docs/current/api/org/springframework/ai/chat/client/ChatClientResponse.html).
-
-## 2. Tools: check an order
-
-```java
-class OrderTools {
-    @Tool(description = "Look up an order's delivery status")
-    public String deliveryStatus(String orderId) {
-        return "Order " + orderId + " arrives Friday.";
-    }
-}
-
-String answer = client.prompt()
-    .user("When will order A123 arrive?")
-    .tools(new OrderTools())
-    .call().content();
-```
-
-> The model requests `deliveryStatus("A123")`, Spring AI executes the Java method, and the model uses its result to answer. In 2.0, ChatClient's `ToolCallingAdvisor` manages this loop.
-
-> For a large tool catalog, add the tool-search starter and enable:
-
-```properties
-spring.ai.chat.client.tool-search-advisor.enabled=true
-```
-
-> Tool search discovers relevant tools on demand, reducing the tool definitions included in each model request.
-
-## 3. Memory: remember the order number
-
-```java
-ChatClient memoryClient = builder
-    .defaultAdvisors(
-        MessageChatMemoryAdvisor.builder(chatMemory).build())
-    .build();
-
-memoryClient.prompt()
-    .user("My order number is A123.")
-    .advisors(a -> a.param(ChatMemory.CONVERSATION_ID, conversationId))
-    .call().content();
-
-String answer = memoryClient.prompt()
-    .user("What order number did I give you?")
-    .advisors(a -> a.param(ChatMemory.CONVERSATION_ID, conversationId))
-    .call().content();
-```
-
-> Both requests use the same conversation ID, so the follow-up can recall `A123`. This uses the 2.0 memory API; the preview section introduces session memory.
-
-## 4. Modular RAG: answer from a policy document
-
-> First, extract the PDF text, split it into chunks, and store their embeddings:
-
-```java
-var reader = new PagePdfDocumentReader(
-    new ClassPathResource("return-policy.pdf"));
-var splitter = TokenTextSplitter.builder().withChunkSize(800).build();
-vectorStore.add(splitter.apply(reader.get()));
-```
-
-> Next, retrieve matching chunks and add them to the question before generation:
-
-```java
-var rag = RetrievalAugmentationAdvisor.builder()
-    .documentRetriever(VectorStoreDocumentRetriever.builder()
-        .vectorStore(vectorStore)
-        .similarityThreshold(0.70)
-        .build())
-    .build();
-
-String answer = client.prompt()
-    .user("Can I return an item after 45 days?")
-    .advisors(rag)
-    .call().content();
-```
-
-> If the PDF specifies a 30-day deadline, the retrieved context gives the model evidence for answering the 45-day question. The similarity threshold controls which matches qualify and should be tuned for the data.
-
-> Optional query rewriting—add this to the advisor builder:
-
-```java
-.queryTransformers(RewriteQueryTransformer.builder()
-    .chatClientBuilder(builder.build().mutate())
-    .build())
-```
-
-> Optional filtered lookup:
-
-```java
-List<Document> matches = vectorStore.similaritySearch(
-    SearchRequest.builder()
-        .query("return deadline")
-        .filterExpression("country == 'DK'")
-        .topK(3).build());
-```
-
-> Query rewriting turns an informal question into a clearer search query. The metadata filter limits results to documents tagged `country=DK`.
-
-## 5. MCP: expose the order lookup to another application
-
-> Server component:
-
-```java
-@Component
-class OrderMcpTools {
-    @McpTool(description = "Look up delivery status")
-    public String deliveryStatus(
-            @McpToolParam(required = true) String orderId) {
-        return "Order " + orderId + " arrives Friday.";
-    }
-}
-```
-
-> Server configuration:
-
-```properties
-spring.ai.mcp.server.protocol=STREAMABLE
-```
-
-> Client connection:
-
-```properties
-spring.ai.mcp.client.streamable-http.connections.orders.url=http://localhost:8080
-```
-
-> Client request, using the configured MCP tool callback provider:
-
-```java
-String answer = client.prompt()
-    .user("When will order A123 arrive?")
-    .toolCallbacks(mcpToolCallbackProvider.getToolCallbacks())
-    .call().content();
-```
-
-> The request travels from ChatClient through the MCP client to the order server. The server executes the lookup and returns its result. Client and server run as separate applications; endpoint security is configured separately.
-
-## 6. Jev: classify and evaluate
 
 ```properties
 spring.ai.typesafe.api-key=${TYPESAFE_API_KEY}
@@ -427,11 +531,29 @@ System.out.println(verdict.feedback());
 
 > The answer claims 60 days while the supplied policy says 30, so the judgment should fail and provide feedback. Jev evaluates supplied content; the chat model generates the answer.
 
-> [More Jev examples: retries, guardrails, RAG, and tool selection](docs/spring-ai-2x-reference.md#34-typesafe-jev-structured-judgment-with-java-examples).
+[More Jev examples: retries, guardrails, RAG, and tool selection](docs/spring-ai-2x-reference.md#34-typesafe-jev-structured-judgment-with-java-examples).
 
-## 7. SkillsJars: load instructions from a dependency
+### 7. SkillsJars: load instructions from a dependency
 
-> The browser skill dependency from Setup supplies instructions under `META-INF/skills`.
+**Dependencies** (SkillsJars docs): also explicit versions, outside the BOM.
+
+```xml
+<!-- SkillsTool integration -->
+<dependency>
+    <groupId>org.springaicommunity</groupId>
+    <artifactId>spring-ai-agent-utils</artifactId>
+    <version>0.13.0</version>
+</dependency>
+
+<!-- Example packaged browser skill -->
+<dependency>
+    <groupId>com.skillsjars</groupId>
+    <artifactId>browser-use__browser-use__browser-use</artifactId>
+    <version>2026_02_23-1d154e1</version>
+</dependency>
+```
+
+> The browser skill dependency supplies instructions under `META-INF/skills`.
 
 ```java
 ChatClient skillsClient = builder
@@ -450,11 +572,25 @@ String plan = skillsClient.prompt()
 
 > [Custom skill definition, packaging, and extraction](docs/spring-ai-2x-reference.md#35-skillsjars-package-agent-instructions-as-java-dependencies).
 
-## 8. Spring AI 2.1 preview
+### 8. Spring AI 2.1 preview
 
-> Use **2.1.0-RC1** dependencies for these snippets.
+> Use the **2.1.0-RC1** Spring AI BOM (available from Maven Central) with the Spring Boot **4.2** RC baseline (Initializr offers `4.2.0-RC1`). Keep the preview setup separate from the stable examples.
 
-### Session memory
+**Dependencies**: the JDBC session starter and a database driver; H2 is sufficient for a local example.
+
+```xml
+<dependency>
+    <groupId>org.springframework.ai</groupId>
+    <artifactId>spring-ai-starter-model-session-jdbc</artifactId>
+</dependency>
+<dependency>
+    <groupId>com.h2database</groupId>
+    <artifactId>h2</artifactId>
+    <scope>runtime</scope>
+</dependency>
+```
+
+#### Session memory
 
 ```java
 ChatClient sessionClient = builder
@@ -470,69 +606,4 @@ String answer = sessionClient.prompt()
     .call().content();
 ```
 
-> Session memory stores conversation events and builds a smaller view for the model. Compaction keeps recent complete turns while retaining the original event log.
-
-### Tool confirmation
-
-```java
-@Tool(description = "Cancel an order", requiresConfirmation = true)
-public String cancelOrder(String orderId) {
-    return orderService.cancel(orderId);
-}
-```
-
-> A request to cancel an order pauses for a decision before execution. The application collects approval, executes allowed calls, and resumes the conversation. The annotation marks the requirement; the application provides the UI and resumption logic.
-
-### Responses API
-
-```properties
-spring.ai.openai.chat.api=responses
-spring.ai.openai.responses.model=gpt-5-mini
-spring.ai.openai.responses.reasoning-effort=medium
-```
-
-> These properties select the Responses integration while keeping the same ChatClient API.
-
-### Chunk overlap
-
-```java
-var splitter = TokenTextSplitter.builder()
-    .withChunkSize(800)
-    .withChunkOverlap(100)
-    .build();
-```
-
-> Each chunk repeats up to 100 tokens from the preceding chunk, preserving context near boundaries. Overlap counts toward the 800-token chunk size.
-
-### Existing vectors
-
-```java
-vectorStore.upsert(List.of(new EmbeddedDocument(document, embedding)));
-
-List<Document> matches = vectorStore.similaritySearch(
-    queryEmbedding, SearchRequest.builder().topK(3).build());
-```
-
-> `upsert` stores a document with its existing embedding. The search accepts an existing query vector. Both operations require a supporting store and compatible embeddings.
-
-## Additional capabilities
-
-| Feature | Behavior |
-|---|---|
-| Semantic cache | Equivalent questions can reuse a cached answer when similarity meets the configured threshold |
-| Observability | `response.getMetadata().getUsage()` exposes usage; configured tracing records model and tool operations |
-| Message parts, preview | `response.getResult().getOutput().getParts()` exposes ordered content parts |
-| Audio/image | Supported models transcribe recordings, stream speech, or generate images |
-
-## What's next
-
-> **2.1 GA target: 19 November 2026**, subject to change. The announced focus is stabilizing session memory and message parts. Legacy chat-memory APIs are deprecated in the preview for planned removal in 3.0.
-
-## Links
-
-- [Spring AI learning resources](https://spring.io/projects/spring-ai#learn)
-- [2.0 release overview](https://spring.io/blog/2026/06/12/spring-ai-2-0-0-GA-available-now/)
-- [2.1 preview and next steps](https://spring.io/blog/2026/10/23/spring-ai-2-1-0-RC1-available-now/)
-- [TypeSafe structured judgment](https://spring.io/blog/2026/09/21/spring-ai-typesafe-structured-judgment/)
-- [SkillsJars](https://www.skillsjars.com/docs)
-- [Detailed examples and complete references](docs/spring-ai-2x-reference.md)
+> The session ID is required on every call, and a session that does not exist yet is created on first use. Compaction keeps turn boundaries intact, and the original events stay in the log.
